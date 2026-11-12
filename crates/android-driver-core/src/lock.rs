@@ -151,9 +151,7 @@ fn prepare_lock_dir(path: &Path) -> Result<PathBuf> {
                     ))
                 })?;
         }
-        if let Some(expected_uid) = current_uid()
-            && metadata.uid() != expected_uid
-        {
+        if metadata.uid() != current_uid() {
             return Err(invalid_argument(format!(
                 "lock directory is owned by another user: {}",
                 canonical.display()
@@ -188,9 +186,8 @@ fn create_private_dir(path: &Path) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn current_uid() -> Option<u32> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    std::fs::metadata(home).ok().map(|metadata| metadata.uid())
+fn current_uid() -> u32 {
+    rustix::process::getuid().as_raw()
 }
 
 fn lock_file_name(endpoint: &AdbEndpoint, serial: &str) -> String {
@@ -206,6 +203,89 @@ fn lock_file_name(endpoint: &AdbEndpoint, serial: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    struct TempDir(PathBuf);
+
+    #[cfg(unix)]
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let index = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "android-driver-lock-unit-{}-{index}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_uid_is_independent_of_home() {
+        const CHILD: &str = "ANDROID_DRIVER_UID_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let directory = TempDir::new();
+            let expected = std::fs::metadata(&directory.0).unwrap().uid();
+            assert_eq!(current_uid(), expected);
+            return;
+        }
+        let directory = TempDir::new();
+        for home in [
+            None,
+            Some(directory.0.join("missing")),
+            Some(PathBuf::from("/")),
+        ] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", "lock::tests::process_uid_is_independent_of_home"])
+                .env(CHILD, "1")
+                .env_remove("HOME");
+            if let Some(home) = &home {
+                command.env("HOME", home);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "HOME={home:?}:\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lock_permissions_are_private() {
+        let directory = TempDir::new();
+        std::fs::set_permissions(&directory.0, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let endpoint = AdbEndpoint::parse("127.0.0.1:5037").unwrap();
+        let lock = DeviceLock::acquire(&directory.0, &endpoint, "PRIVATE").unwrap();
+        assert_eq!(
+            std::fs::metadata(&directory.0).unwrap().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(lock.path()).unwrap().mode() & 0o777,
+            0o600
+        );
+        let public_file = directory.0.join(lock_file_name(&endpoint, "PUBLIC"));
+        std::fs::write(&public_file, b"").unwrap();
+        std::fs::set_permissions(&public_file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let error = DeviceLock::acquire(&directory.0, &endpoint, "PUBLIC")
+            .err()
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error.message.contains("private regular file"));
+    }
 
     #[test]
     fn default_lock_dir_is_home_based() {
