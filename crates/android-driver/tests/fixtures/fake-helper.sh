@@ -38,6 +38,9 @@ reply_error() {
   printf '{"id":%s,"ok":false,"result":{"error":"%s"}}\n' "$1" "$2"
 }
 
+if [[ -n "${FAKE_HELPER_READY_DELAY_MS:-}" ]]; then
+  sleep "$(awk -v ms="$FAKE_HELPER_READY_DELAY_MS" 'BEGIN { printf "%.3f", ms / 1000 }')"
+fi
 ready
 if [[ "${FAKE_HELPER_EXIT_AFTER_READY:-0}" == "1" ]]; then
   exit 1

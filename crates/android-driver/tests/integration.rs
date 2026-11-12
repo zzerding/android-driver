@@ -337,6 +337,144 @@ fn open_requires_a_confirmed_unlock_and_fails_without_a_helper() {
 }
 
 #[test]
+fn partial_open_push_failure_removes_the_partial_upload() {
+    for cancelled in [false, true] {
+        let env = TestEnv::new();
+        let mut driver = env.spawn_with(
+            &["--adb-timeout-ms", "500"],
+            &[("FAKE_ADB_PUSH_DELAY_MS", "5000")],
+        );
+        let open_id = driver.send_op("open", open_request());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !env.state().join("push-started").is_file() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "open did not reach upload: {:?}",
+                driver.recv_optional(Duration::from_millis(1))
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if cancelled {
+            driver.close_stdin();
+        }
+        let response = driver.recv().expect("open response");
+        assert_eq!(response["id"], open_id);
+        assert_eq!(
+            error_code(&response),
+            if cancelled { "Cancelled" } else { "Timeout" }
+        );
+        let jar = env
+            .adb_argument_starting_with("/data/local/tmp/android-driver-")
+            .expect("partial upload path");
+        assert!(env.adb_contains(&["shell", "rm", "-f", &jar]));
+        assert!(!env.state().join("uploaded-jar").exists());
+        driver.close_stdin();
+        assert_eq!(driver.wait_exit(Duration::from_secs(5)), 0);
+    }
+}
+
+#[test]
+fn partial_open_ready_failure_closes_the_helper_and_holds_the_lock_through_cleanup() {
+    for cleanup_fails in [false, true] {
+        let env = TestEnv::new();
+        let mut driver = env.spawn_with(
+            &["--cleanup-timeout-ms", "3000"],
+            &[
+                ("FAKE_HELPER_NO_FOCUS", "1"),
+                ("FAKE_ADB_CLEANUP_WAIT", "1"),
+                ("FAKE_ADB_RM_FAIL", if cleanup_fails { "1" } else { "0" }),
+                (
+                    "FAKE_HELPER_IGNORE_CLOSE",
+                    if cleanup_fails { "1" } else { "0" },
+                ),
+            ],
+        );
+        let mut second = env.spawn();
+        driver.send_op("open", open_request());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !env.state().join("rm-started").is_file() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "rollback did not reach jar removal: {:?}",
+                driver.recv_optional(Duration::from_millis(1))
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(error_code(&second.request("open", open_request())), "Busy");
+        std::fs::write(env.state().join("rm-release"), b"").unwrap();
+        let response = driver.recv().expect("open response");
+        assert_eq!(error_code(&response), "Unsupported");
+        assert!(error_message(&response).contains("independent focus"));
+        assert!(env.helper_log_contains("\"command\":\"close\""));
+        assert!(env.adb_contains(&["shell", "rm", "-f"]));
+        let status = ok_result(&driver.request("status", json!({})));
+        assert_eq!(
+            status["state"],
+            if cleanup_fails { "failed" } else { "idle" },
+            "{response}"
+        );
+        if cleanup_fails {
+            let errors = response["error"]["details"]["cleanup_errors"]
+                .as_array()
+                .unwrap();
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.as_str().unwrap().contains("cannot remove"))
+            );
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.as_str().unwrap().contains("cannot verify removal"))
+            );
+        } else {
+            assert!(!env.state().join("display-active").exists());
+            assert!(!env.state().join("uploaded-jar").exists());
+            assert!(response["error"]["details"]["cleanup_errors"].is_null());
+        }
+        ok_result(&second.request("open", open_request()));
+        ok_result(&second.request("close", json!({})));
+        driver.close_stdin();
+        second.close_stdin();
+        assert_eq!(driver.wait_exit(Duration::from_secs(5)), 0);
+        assert_eq!(second.wait_exit(Duration::from_secs(5)), 0);
+    }
+}
+
+#[test]
+fn partial_open_ready_timeout_still_sends_close() {
+    let env = TestEnv::new();
+    let mut driver = env.spawn_with(
+        &[
+            "--helper-timeout-ms",
+            "1000",
+            "--cleanup-timeout-ms",
+            "5000",
+        ],
+        &[("FAKE_HELPER_READY_DELAY_MS", "2000")],
+    );
+    let response = driver.request("open", open_request());
+    assert_eq!(error_code(&response), "Timeout");
+    assert!(env.helper_log_contains("\"command\":\"close\""));
+    assert!(!env.state().join("display-active").exists());
+    assert!(!env.state().join("uploaded-jar").exists());
+    let errors = response["error"]["details"]["cleanup_errors"]
+        .as_array()
+        .unwrap();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.as_str().unwrap().contains("display id"))
+    );
+    assert_eq!(
+        ok_result(&driver.request("status", json!({})))["state"],
+        "failed"
+    );
+    driver.close_stdin();
+    assert_eq!(driver.wait_exit(Duration::from_secs(5)), 0);
+}
+
+#[test]
 fn input_is_blocked_by_lockscreen_physical_use_and_wrong_virtual_target() {
     let env = TestEnv::new();
     let mut driver = open_and_launch(&env, &[], &[]);

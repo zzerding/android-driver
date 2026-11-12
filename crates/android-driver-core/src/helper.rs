@@ -61,6 +61,23 @@ impl Helper {
         timeout: Duration,
         cancel: CancelToken,
     ) -> Result<Self> {
+        let mut helper = Self::start(adb, spec, cancel)?;
+        if let Err(error) = helper.initialize(spec, timeout) {
+            let cleanup = helper.shutdown(timeout);
+            return Err(if cleanup.is_empty() {
+                error
+            } else {
+                error.detail("cleanup_errors", cleanup)
+            });
+        }
+        Ok(helper)
+    }
+
+    pub(crate) fn start(
+        adb: &AdbRunner,
+        spec: &HelperSpec<'_>,
+        cancel: CancelToken,
+    ) -> Result<Self> {
         let mut command = adb.command(Some(spec.serial));
         command
             .arg("shell")
@@ -104,7 +121,7 @@ impl Helper {
         spawn_stdout_reader(stdout, sender);
         let stderr = spawn_stderr_reader(stderr_pipe);
 
-        let mut helper = Self {
+        Ok(Self {
             child,
             stdin,
             events,
@@ -118,11 +135,20 @@ impl Helper {
             },
             next_id: 1,
             cancel,
-        };
+        })
+    }
 
-        let ready = helper.wait_reply(0, timeout)?;
-        helper.info = validate_ready(&ready, spec)?;
-        Ok(helper)
+    pub(crate) fn initialize(&mut self, spec: &HelperSpec<'_>, timeout: Duration) -> Result<()> {
+        let ready = self.wait_reply(0, timeout)?;
+        if let Some(display_id) = ready_display_id(&ready) {
+            self.info.display_id = display_id;
+        }
+        self.info = validate_ready(&ready, spec)?;
+        Ok(())
+    }
+
+    pub(crate) fn observed_display_id(&self) -> Option<u32> {
+        (self.info.display_id > 0).then_some(self.info.display_id)
     }
 
     pub fn info(&self) -> HelperInfo {
@@ -323,10 +349,7 @@ fn validate_ready(result: &Value, spec: &HelperSpec<'_>) -> Result<HelperInfo> {
     let object = result
         .as_object()
         .ok_or_else(|| internal("virtual display helper ready reply is not an object"))?;
-    let display_id = object
-        .get("display_id")
-        .and_then(Value::as_i64)
-        .filter(|value| *value > 0 && *value <= i64::from(i32::MAX))
+    let display_id = ready_display_id(result)
         .ok_or_else(|| internal("virtual display helper returned an invalid display id"))?;
     if object.get("own_focus").and_then(Value::as_bool) != Some(true) {
         return Err(DriverError::new(
@@ -352,12 +375,20 @@ fn validate_ready(result: &Value, spec: &HelperSpec<'_>) -> Result<HelperInfo> {
         }
     }
     Ok(HelperInfo {
-        display_id: u32::try_from(display_id).expect("positive i32"),
+        display_id,
         width: spec.width,
         height: spec.height,
         dpi: spec.dpi,
         uid: EXTERNAL_HELPER_UID,
     })
+}
+
+fn ready_display_id(result: &Value) -> Option<u32> {
+    result
+        .get("display_id")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0 && *value <= i64::from(i32::MAX))
+        .map(|value| u32::try_from(value).expect("positive i32"))
 }
 
 fn spawn_stdout_reader(stdout: impl Read + Send + 'static, sender: SyncSender<HelperEvent>) {
