@@ -51,7 +51,7 @@ Coordinates use the exact screenshot pixel dimensions returned by the session. T
 
 `open` locks one device identified by canonical adb server IP/port and serial, regardless of Android user. The default per-user lock directory is `~/.android-driver/locks`; lock files persist and kernel locks release on process exit. This is host-local advisory ownership: other machines, containers with different lock namespaces, and tools that ignore this driver's lock are not coordinated. Remote adb server addresses must be IP literals or `localhost` and must be reachable. The optional `--lock-dir` exists for test harnesses and explicit host-local coordination; all clients sharing the device must use the same directory.
 
-The process owns the session until `close`, stdin EOF, or an output pipe failure. EOF cancels pending work and triggers bounded best-effort cleanup. A timeout on a side-effecting action is not retried; its result may be unknown and the session becomes unusable. A forced process kill or a lost adb connection can still leave device-side state behind. Cleanup is verified before the lock is released where the device remains reachable; uncertain dumpsys output is not proof of removal.
+The process owns the session until `close`, stdin EOF, or an output pipe failure. EOF cancels pending work and triggers bounded best-effort cleanup. A timeout on launch dispatch, input dispatch, or post-launch verification includes `error.details.result_unknown: true`; it is not retried and the session becomes unusable. A forced process kill or a lost adb connection can still leave device-side state behind. Cleanup is verified before the lock is released where the device remains reachable; uncertain dumpsys output is not proof of removal.
 
 Before launch and each input, the driver requires a confirmed unlocked keyguard and refuses to interfere when the same package is resumed on physical display 0 for the session user. Components with launch modes that may reuse a task are refused. Launch is accepted only after the target package is observed resumed on the virtual display and user. These checks are conservative heuristics, not a security boundary.
 
@@ -132,7 +132,7 @@ try {
 }
 ```
 
-Production clients should also reject duplicate IDs, apply request deadlines, validate the `ready` frame and protocol version, and terminate/reap the child on output failure. A timed-out side-effecting request must not be resent.
+Production clients should also reject duplicate IDs, apply request deadlines, validate the `ready` frame and protocol version, and terminate/reap the child on output failure. Check `response.error?.details?.result_unknown === true`: stop automatic replay, reconcile the application outcome independently, and establish a fresh session before further actions. The flag is a JSON boolean; read-only helper timeouts and policy rejections do not receive it, and its absence is not proof that an action had no effect. A timed-out side-effecting request must not be resent.
 
 ## Unicode input
 

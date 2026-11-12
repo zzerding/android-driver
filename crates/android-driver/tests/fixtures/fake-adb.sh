@@ -96,8 +96,10 @@ case "$command" in
           exit 0
         fi
         printf 'Starting: Intent { cmp=%s }\n' "$component"
-        printf '  mResumedActivity: ActivityRecord{fake1 u%s %s t99}\n' "$user" "$component" \
-          > "$state/virtual-activities"
+        if [[ "${FAKE_ADB_START_NO_ACTIVITY:-0}" != "1" ]]; then
+          printf '  mResumedActivity: ActivityRecord{fake1 u%s %s t99}\n' "$user" "$component" \
+            > "$state/virtual-activities"
+        fi
         ;;
       input)
         if [[ -n "${FAKE_ADB_INPUT_DELAY_MS:-}" ]]; then

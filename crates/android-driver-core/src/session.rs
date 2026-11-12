@@ -335,6 +335,9 @@ impl Driver {
                 }
             }
             Err(error) if error.code == ErrorCode::Cancelled => return Err(error),
+            Err(error) if error.code == ErrorCode::Timeout => {
+                return Err(self.invalidate_active(error.detail("result_unknown", true)));
+            }
             Err(error) => return Err(self.invalidate_active(error)),
         }
 
@@ -811,6 +814,9 @@ impl Driver {
                 Ok(())
             }
             Err(error) if error.code == ErrorCode::Cancelled => Err(error),
+            Err(error) if error.code == ErrorCode::Timeout => {
+                Err(self.invalidate_active(error.detail("result_unknown", true)))
+            }
             Err(error) => Err(self.invalidate_active(error)),
         }
     }
@@ -867,7 +873,8 @@ impl Driver {
                     LAUNCH_VERIFY_TIMEOUT.as_millis()
                 ),
             )
-            .detail("last_observation", last),
+            .detail("last_observation", last)
+            .detail("result_unknown", true),
         ))
     }
 

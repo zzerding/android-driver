@@ -49,6 +49,14 @@ Failure:
 
 Codes include `Busy`, `Blocked`, `Unsupported`, `InvalidArgument`, `DeviceDisconnected`, `Timeout`, `CleanupFailed`, `InvalidState`, `Cancelled`, `Protocol`, and `Internal`. A parse failure includes the request ID only if one could be safely extracted.
 
-If an action times out, the operation may already have taken effect. The driver never replays it and invalidates the session. Clients must treat a side-effect timeout as unknown outcome, not as proof of no action. After stdin EOF, pending work is cancelled and bounded cleanup starts. `close` succeeds only when helper shutdown, jar removal, and virtual-display removal have all been confirmed. Incomplete or uncertain cleanup is reported and logged; after cleanup attempts the host lock is released.
+When launch dispatch, input dispatch (`tap`, `swipe`, or `key`), or post-launch verification times out, the error includes the JSON boolean `details.result_unknown: true`:
+
+```json
+{"type":"response","id":5,"ok":false,"error":{"code":"Timeout","message":"adb command timed out after 15000 ms","details":{"result_unknown":true}}}
+```
+
+The operation may already have taken effect. The driver never replays it and invalidates the session. Clients must treat `error.details.result_unknown === true` as an unknown outcome: do not automatically resend the action, reconcile the application outcome independently, and establish a fresh session before further actions. Existing diagnostics such as `args`, `stderr`, `last_observation`, or `cleanup_errors` can accompany this flag. Read-only helper timeouts and policy rejections do not receive it; its absence does not prove that an operation had no effect.
+
+After stdin EOF, pending work is cancelled and bounded cleanup starts. `close` succeeds only when helper shutdown, jar removal, and virtual-display removal have all been confirmed. Incomplete or uncertain cleanup is reported and logged; after cleanup attempts the host lock is released.
 
 The protocol does not define Android text input, app navigation, page state, OCR, model requests, CDP, or token handshakes.

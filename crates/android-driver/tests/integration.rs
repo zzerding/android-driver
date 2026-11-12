@@ -269,6 +269,11 @@ fn launch_guards_refuse_locked_screens_and_unsafe_task_reuse() {
     let unsafe_mode = driver.request("launch", launch_request());
     assert_eq!(error_code(&unsafe_mode), "Blocked");
     assert!(
+        unsafe_mode["error"]["details"]
+            .get("result_unknown")
+            .is_none()
+    );
+    assert!(
         !env.adb_contains(&["shell", "am", "start-activity"]),
         "unsafe launchMode must be rejected before am runs"
     );
@@ -436,6 +441,9 @@ fn an_input_timeout_reports_timeout_once_and_invalidates_the_session() {
 
     let timed_out = driver.request("tap", tap_fields(10, 20));
     assert_eq!(error_code(&timed_out), "Timeout");
+    assert_eq!(timed_out["error"]["details"]["result_unknown"], true);
+    assert!(timed_out["error"]["details"]["args"].is_array());
+    assert!(timed_out["error"]["details"]["stderr"].is_string());
     assert_eq!(
         env.adb_count(&["shell", "input", "-d", "7", "tap", "10", "20"]),
         1,
@@ -460,6 +468,50 @@ fn an_input_timeout_reports_timeout_once_and_invalidates_the_session() {
 
     driver.close_stdin();
     assert_eq!(driver.wait_exit(Duration::from_secs(5)), 0);
+}
+
+#[test]
+fn launch_timeouts_report_unknown_results_without_replaying() {
+    for verification in [false, true] {
+        let env = TestEnv::new();
+        let envs = if verification {
+            vec![("FAKE_ADB_START_NO_ACTIVITY", "1")]
+        } else {
+            vec![("FAKE_ADB_START_DELAY_MS", "5000")]
+        };
+        let mut driver = env.spawn_with(&["--adb-timeout-ms", "2000"], &envs);
+        ok_result(&driver.request("open", open_request()));
+
+        let timed_out = driver.request("launch", launch_request());
+        assert_eq!(error_code(&timed_out), "Timeout");
+        assert_eq!(timed_out["error"]["details"]["result_unknown"], true);
+        if verification {
+            assert!(timed_out["error"]["details"]["last_observation"].is_string());
+        } else {
+            assert!(timed_out["error"]["details"]["args"].is_array());
+            assert!(timed_out["error"]["details"]["stderr"].is_string());
+        }
+        assert_eq!(env.adb_count(&["shell", "am", "start-activity"]), 1);
+        assert!(env.adb_contains(&["shell", "rm", "-f"]));
+        let status = ok_result(&driver.request("status", json!({})));
+        assert_eq!(status["state"], "failed");
+        assert_eq!(
+            error_code(&driver.request("launch", launch_request())),
+            "InvalidState"
+        );
+        assert_eq!(env.adb_count(&["shell", "am", "start-activity"]), 1);
+
+        let mut replacement = env.spawn();
+        assert_eq!(
+            ok_result(&replacement.request("open", open_request()))["state"],
+            "active"
+        );
+        ok_result(&replacement.request("close", json!({})));
+        replacement.close_stdin();
+        assert_eq!(replacement.wait_exit(Duration::from_secs(5)), 0);
+        driver.close_stdin();
+        assert_eq!(driver.wait_exit(Duration::from_secs(5)), 0);
+    }
 }
 
 #[test]
@@ -492,6 +544,11 @@ fn helper_timeouts_discard_late_replies_and_release_the_lock() {
 
         let timed_out = driver.request(operation, fields.clone());
         assert_eq!(error_code(&timed_out), "Timeout", "{operation}");
+        assert!(
+            timed_out["error"]["details"]
+                .get("result_unknown")
+                .is_none()
+        );
         let status = ok_result(&driver.request("status", json!({})));
         assert_eq!(status["state"], "failed", "{operation}");
         assert!(env.state().join(replied).is_file(), "{operation}");
