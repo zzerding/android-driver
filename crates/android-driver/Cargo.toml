@@ -1,0 +1,19 @@
+[package]
+name = "android-driver"
+description = "JSON-lines stdio driver for one Android device session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "android-driver"
+path = "src/main.rs"
+
+[dependencies]
+android-driver-core = { path = "../android-driver-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
