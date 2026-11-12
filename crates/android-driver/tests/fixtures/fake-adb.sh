@@ -40,6 +40,11 @@ case "$command" in
     fi
     ;;
   push)
+    printf '%s' "${args[2]}" > "$state/uploaded-jar"
+    touch "$state/push-started"
+    if [[ -n "${FAKE_ADB_PUSH_DELAY_MS:-}" ]]; then
+      exec sleep "$(awk -v ms="$FAKE_ADB_PUSH_DELAY_MS" 'BEGIN { printf "%.3f", ms / 1000 }')"
+    fi
     ;;
   shell)
     shell_args=("${args[@]:1}")
@@ -110,12 +115,21 @@ case "$command" in
         fi
         ;;
       rm)
+        touch "$state/rm-started"
+        if [[ "${FAKE_ADB_CLEANUP_WAIT:-0}" == "1" ]]; then
+          while [[ ! -f "$state/rm-release" ]]; do
+            sleep 0.01
+          done
+        fi
         if [[ -n "${FAKE_ADB_CLEANUP_DELAY_MS:-}" ]]; then
           sleep "$(awk -v ms="$FAKE_ADB_CLEANUP_DELAY_MS" 'BEGIN { printf "%.3f", ms / 1000 }')"
         fi
         if [[ "${FAKE_ADB_RM_FAIL:-0}" == "1" ]]; then
           printf 'error: failed to remove %s\n' "${shell_args[2]:-}" >&2
           exit 1
+        fi
+        if [[ -f "$state/uploaded-jar" && "${shell_args[2]:-}" == "$(cat "$state/uploaded-jar")" ]]; then
+          rm -f "$state/uploaded-jar"
         fi
         ;;
       env)

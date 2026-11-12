@@ -562,12 +562,12 @@ impl Driver {
             })?;
             let token = unique_token();
             let jar = format!("/data/local/tmp/android-driver-{token}.jar");
+            jar_path = Some(jar.clone());
             self.adb.run(
                 Some(&request.serial),
                 &["push", helper_host_path, &jar],
                 None,
             )?;
-            jar_path = Some(jar.clone());
 
             let nice_name = format!("android-driver-vd-{token}");
             let spec = HelperSpec {
@@ -578,12 +578,11 @@ impl Driver {
                 dpi,
                 nice_name: &nice_name,
             };
-            let spawned = Helper::spawn(
-                &self.adb,
-                &spec,
-                self.config.helper_timeout,
-                self.config.cancel.clone(),
-            )?;
+            helper = Some(Helper::start(&self.adb, &spec, self.config.cancel.clone())?);
+            let spawned = helper
+                .as_mut()
+                .expect("helper started before initialization");
+            spawned.initialize(&spec, self.config.helper_timeout)?;
             let info = spawned.info();
             if info.uid != EXTERNAL_HELPER_UID {
                 return Err(DriverError::new(
@@ -591,7 +590,6 @@ impl Driver {
                     "virtual display helper is not running as adb shell uid 2000",
                 ));
             }
-            helper = Some(spawned);
             Ok(DisplaySpec {
                 id: info.display_id,
                 width: info.width,
@@ -618,15 +616,23 @@ impl Driver {
             Err(cause) => {
                 let mut cleanup = Vec::new();
                 if let Some(mut spawned) = helper {
-                    let display_id = spawned.display_id();
+                    let display_id = spawned.observed_display_id();
                     cleanup.extend(spawned.shutdown(self.config.cleanup_timeout));
-                    if let Err(error) = verify_display_removed(
-                        &self.cleanup_adb,
-                        &request.serial,
-                        display_id,
-                        self.config.cleanup_timeout,
-                    ) {
-                        cleanup.push(error);
+                    match display_id {
+                        Some(display_id) => {
+                            if let Err(error) = verify_display_removed(
+                                &self.cleanup_adb,
+                                &request.serial,
+                                display_id,
+                                self.config.cleanup_timeout,
+                            ) {
+                                cleanup.push(error);
+                            }
+                        }
+                        None => cleanup.push(
+                            "cannot verify virtual display removal without a ready display id"
+                                .to_owned(),
+                        ),
                     }
                 }
                 if let Some(jar) = &jar_path
@@ -646,6 +652,7 @@ impl Driver {
                 } else {
                     cause
                 };
+                drop(lock);
                 Err((cause, cleanup_failed))
             }
         }
