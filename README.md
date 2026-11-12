@@ -57,32 +57,40 @@ Before launch and each input, the driver requires a confirmed unlocked keyguard 
 
 ## Rust API
 
-The core library can be embedded directly when the host is Rust:
+The core library can be embedded directly when the host is Rust. The standalone [session example](crates/android-driver/examples/session.rs) is compiled by `cargo check --workspace --all-targets`:
 
 ```rust,no_run
 use std::ffi::OsString;
 use std::time::Duration;
+
 use android_driver_core::{AdbEndpoint, CancelToken, Driver, DriverConfig, OpenRequest};
 
 fn main() -> android_driver_core::Result<()> {
-    let cancel = CancelToken::new();
-    let endpoint = AdbEndpoint::parse("localhost:5037")?;
     let mut driver = Driver::new(DriverConfig {
         adb_path: OsString::from("adb"),
-        endpoint,
+        endpoint: AdbEndpoint::parse("localhost:5037")?,
         helper_path: Some("helper/build/virtual-display-helper.zip".into()),
         lock_dir: None,
         adb_timeout: Duration::from_secs(15),
         helper_timeout: Duration::from_secs(8),
         cleanup_timeout: Duration::from_secs(5),
-        cancel,
+        cancel: CancelToken::new(),
     });
-    let session = driver.open(OpenRequest { serial: "DEVICE_SERIAL".into(), user: 0 })?;
-    let _ = driver.launch("com.example.app/.Main")?;
-    let _ = driver.screenshot()?;
-    driver.close()?;
-    println!("virtual display {} closed", session.display_id);
-    Ok(())
+    let result = (|| {
+        let session = driver.open(OpenRequest {
+            serial: "DEVICE_SERIAL".into(),
+            user: 0,
+        })?;
+        driver.launch("com.example.app/.Main")?;
+        driver.screenshot()?;
+        driver.close()?;
+        println!("virtual display {} closed", session.display_id);
+        Ok(())
+    })();
+    for error in driver.shutdown() {
+        eprintln!("cleanup: {error}");
+    }
+    result
 }
 ```
 
@@ -90,55 +98,52 @@ Call `shutdown()` during host shutdown and report its returned cleanup errors. D
 
 ## Node.js subprocess example
 
+Run the standalone [demo](examples/node.mjs) from the repository root with `node examples/node.mjs`, after building the binary and adding it to `PATH`. Replace the placeholder serial/component first. Its [small client](examples/node-client.mjs) uses only Node.js standard modules, waits for protocol-1 ready, correlates response IDs, and rejects and clears all pending promises on malformed output, pipe failure, spawn failure, or stdout EOF. Errors retain the driver's structured response.
+
 ```js
 import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
+import { createClient } from "./node-client.mjs";
 
 const child = spawn("android-driver", ["--helper", "helper/build/virtual-display-helper.zip"], {
   stdio: ["pipe", "pipe", "inherit"],
 });
-const lines = createInterface({ input: child.stdout });
-let nextId = 1;
-const pending = new Map();
+const client = createClient(child);
 
-lines.on("line", (line) => {
-  const message = JSON.parse(line);
-  if (message.type === "ready") return;
-  const resolve = pending.get(message.id);
-  if (resolve) {
-    pending.delete(message.id);
-    resolve(message);
+function checked(response) {
+  if (!response.ok) {
+    throw Object.assign(new Error(response.error.message), { driverError: response.error });
   }
-});
-
-function request(op, fields = {}) {
-  const id = nextId++;
-  const response = new Promise((resolve) => pending.set(id, resolve));
-  child.stdin.write(JSON.stringify({ id, op, ...fields }) + "\n");
-  return response;
+  return response.result;
 }
 
-const opened = await request("open", { serial: "DEVICE_SERIAL", user: 0 });
-if (!opened.ok) throw new Error(opened.error.message);
 try {
-  const launched = await request("launch", { component: "com.example.app/.Main" });
-  if (!launched.ok) throw new Error(launched.error.message);
-  const screenshot = await request("screenshot");
-  if (!screenshot.ok) throw new Error(screenshot.error.message);
+  checked(await client.request("open", { serial: "DEVICE_SERIAL", user: 0 }));
+  checked(await client.request("launch", { component: "com.example.app/.Main" }));
+  const screenshot = checked(await client.request("screenshot"));
+  console.log(`captured ${screenshot.width}x${screenshot.height}`);
+  checked(await client.request("close"));
+} catch (error) {
+  console.error(error);
+  process.exitCode = 1;
 } finally {
-  const closed = await request("close");
-  if (!closed.ok) throw new Error(closed.error.message);
-  child.stdin.end();
+  try {
+    await client.end();
+  } catch (error) {
+    console.error("driver shutdown:", error);
+    process.exitCode = 1;
+  }
 }
 ```
 
-Production clients should also reject duplicate IDs, apply request deadlines, validate the `ready` frame and protocol version, and terminate/reap the child on output failure. Check `response.error?.details?.result_unknown === true`: stop automatic replay, reconcile the application outcome independently, and establish a fresh session before further actions. The flag is a JSON boolean; read-only helper timeouts and policy rejections do not receive it, and its absence is not proof that an action had no effect. A timed-out side-effecting request must not be resent.
+The outer `finally` ends stdin and waits for child `close` even if open or another operation fails; stdin EOF requests driver cleanup. Transport failures terminate the child and reject pending requests. The demo does not automatically replay operations. Production clients must additionally impose request and exit deadlines and enforce message/queue bounds; this small example does not guarantee completion if a child remains alive but never responds or exits. Check `response.error?.details?.result_unknown === true`: stop automatic replay, reconcile the application outcome independently, and establish a fresh session before further actions. The flag is a JSON boolean; read-only helper timeouts and policy rejections do not receive it, and its absence is not proof that an action had no effect. A timed-out side-effecting request must not be resent.
 
 ## Unicode input
 
 There is intentionally no text operation. `adb shell input text` does not provide a reliable arbitrary-Unicode contract, especially for CJK text. A zero-install delivery mechanism has not been verified. Future support requires a separate experiment that checks Unicode scalar coverage, spaces and control characters, Android user selection, IME restoration, and behavior on a generic app; until then the protocol reports both text capabilities as false.
 
 ## Offline verification
+
+`cargo check --workspace --all-targets` compiles the Rust example without running it. With Node.js 24, run `node --test examples/node-client.test.mjs` to validate the Node client against local fake JSON-lines peers and check that both README snippets exactly match their standalone files. Node.js is only needed for this separate example check, not for Cargo. These checks do not execute either example against a device; their real-device execution remains unverified.
 
 Integration tests launch a fake `adb` executable and a fake helper. They cover request bounds, device locking, session lifecycle, EOF cancellation, launch/input guards, helper death, timeouts, and cleanup errors without contacting an Android device. These tests establish the local protocol contract only. Android 14 real-device behavior, crash cleanup, cross-host ownership, and Unicode input remain unverified.
 
