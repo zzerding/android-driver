@@ -73,8 +73,12 @@ An `id` of `0` is the startup reply. Its result must contain a positive
 `snapshot` returns `No virtual display frame yet` until the first frame
 arrives; the driver retries briefly.
 
-Closing stdin, the `close` command, and host-side process death all lead to
-`VirtualDisplay.release()`. The display is created with
+The helper's stdin EOF handler and `close` command attempt
+`VirtualDisplay.release()`. Host-side `SIGKILL`, a host crash, or an adb
+disconnection does not guarantee that the helper receives EOF or runs this
+handler. Device-side helper/display recovery in those cases is unverified on
+real hardware; host kernel lock release does not prove device cleanup. The
+display is created with
 `VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL`, so content is not moved back
 to the physical display when the helper exits.
 

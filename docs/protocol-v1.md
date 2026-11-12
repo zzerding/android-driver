@@ -33,6 +33,8 @@ Input coordinates are unsigned, zero-based screenshot pixels. The passed width a
 
 `open` takes a cross-process, host-local exclusive lock for the adb-server endpoint and serial. Only Android SDK 34 and shell UID 2000 are accepted. An open session binds one serial and user. Input is unavailable until a target is launched successfully. No physical-display fallback occurs.
 
+The lock coordinates cooperating processes using the same host-local lock directory and lock namespace for the same endpoint and serial. Its default directory is per-user; another user, a separate container lock namespace, or a tool that ignores the lock is outside this coordination. Connecting to a remote adb server does not coordinate callers on different hosts. Cross-host mutual exclusion is not provided or verified.
+
 Screenshot Base64 uses the standard RFC 4648 alphabet with canonical padding and zero unused trailing bits. The driver rejects PNG data above 8 MiB, invalid signatures, truncated chunks, bad chunk CRCs, unknown critical chunks, and missing IHDR, nonempty IDAT, or IEND chunks. IHDR must be the first and only header, have 13 bytes, and contain positive dimensions matching the virtual display. IEND must be empty and end the file.
 
 These are bounded container checks, not full PNG validation or image decoding. The driver does not validate every IHDR field or all chunk-order constraints, decompress IDAT, or validate scanlines and pixels. Passing these checks does not guarantee that an image decoder can decode the screenshot; clients must handle image-decoding failures.
@@ -61,6 +63,16 @@ When launch dispatch, input dispatch (`tap`, `swipe`, or `key`), or post-launch 
 
 The operation may already have taken effect. The driver never replays it and invalidates the session. Clients must treat `error.details.result_unknown === true` as an unknown outcome: do not automatically resend the action, reconcile the application outcome independently, and establish a fresh session before further actions. Existing diagnostics such as `args`, `stderr`, `last_observation`, or `cleanup_errors` can accompany this flag. Read-only helper timeouts and policy rejections do not receive it; its absence does not prove that an operation had no effect.
 
-After stdin EOF, pending work is cancelled and bounded cleanup starts. `close` succeeds only when helper shutdown, jar removal, and virtual-display removal have all been confirmed. Incomplete or uncertain cleanup is reported and logged; after cleanup attempts the host lock is released.
+After stdin EOF, pending work is cancelled and bounded cleanup starts. A detected stdout write failure also triggers cleanup. `close` succeeds only when helper shutdown, jar removal, and virtual-display removal have all been confirmed. Incomplete or uncertain cleanup is reported and logged; the host lock stays held through every cleanup attempt and is then released, even if cleanup failed. Empty or uncertain dumpsys output does not confirm display removal.
+
+## Operational and verification boundaries
+
+Android 14/API 34, adb shell UID 2000, and a confirmed unlocked keyguard are target conditions, not a real-device compatibility guarantee. Offline fake-adb/fake-helper tests cover protocol handling, partial-open rollback, timeout invalidation, EOF/BrokenPipe cleanup, and host-local lock behavior. Actual Android 14 hardware behavior remains unverified. A closed stdout read end is tested; a connected consumer that stops reading is not a verified cleanup trigger.
+
+`SIGKILL` or a host crash can prevent host cleanup from running. Releasing the kernel-held lock does not confirm device-side cleanup or make a subsequent lock acquisition proof of a clean device. Helper, virtual-display, and jar recovery after forced termination or adb disconnection remains unverified on real hardware.
+
+## Text input boundary
+
+UTF-8 encodes protocol messages; it does not provide Android text entry. There is no text operation, and both `text_input` and `unicode_text_input` are false. The keycode allowlist does not imply arbitrary-Unicode input support. This project has not verified an arbitrary-Unicode/CJK contract through `adb shell input text` or a zero-install delivery mechanism. Adding text entry requires separate verification of Unicode scalar coverage, spaces and control characters, Android user selection, IME restoration, and behavior on a generic app.
 
 The protocol does not define Android text input, app navigation, page state, OCR, model requests, CDP, or token handshakes.
