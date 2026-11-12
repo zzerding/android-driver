@@ -1,8 +1,6 @@
 use std::io::{self, BufRead};
 
-/// Reads one newline-delimited line without letting a hostile peer grow memory
-/// without bound. A line longer than `limit` is drained to its newline and
-/// reported as `TooLong` instead of being returned truncated.
+/// Reads a bounded line; lines exceeding `limit` are drained and reported as `TooLong`, never truncated.
 pub fn read_line_bounded<R: BufRead>(reader: &mut R, limit: usize) -> io::Result<Option<LineRead>> {
     let mut line = Vec::new();
     let mut too_long = false;

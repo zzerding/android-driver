@@ -45,9 +45,7 @@ impl AdbRunner {
         }
     }
 
-    /// Builds a command with a pinned server endpoint. Environment variables
-    /// that could redirect adb to another server or serial are removed so the
-    /// cross-process lock key always describes the server actually used.
+    /// Pins the endpoint and optional serial, removing environment overrides so the device lock matches the server used.
     pub fn command(&self, serial: Option<&str>) -> Command {
         let mut command = Command::new(&self.path);
         command

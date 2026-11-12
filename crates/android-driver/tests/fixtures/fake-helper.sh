@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Deterministic device-side helper stand-in. It speaks the same JSON-lines
-# protocol as the Java helper so the driver can be tested without a device.
 set -euo pipefail
 
 state="${FAKE_ADB_STATE:?FAKE_ADB_STATE is required}"
@@ -103,9 +101,7 @@ while IFS= read -r line; do
       ;;
     close)
       if [[ "${FAKE_HELPER_IGNORE_CLOSE:-0}" == "1" ]]; then
-        # Refuse the close handshake and fail promptly without running the
-        # EXIT trap. The display marker stays behind so the driver must surface
-        # a cleanup failure and still attempt the jar removal/verification.
+        # Keep the display marker to exercise cleanup failure reporting.
         trap - EXIT
         exit 1
       fi

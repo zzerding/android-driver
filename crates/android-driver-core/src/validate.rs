@@ -71,8 +71,7 @@ pub fn validate_display_size(width: u32, height: u32) -> Result<()> {
     Ok(())
 }
 
-/// Accepts `pkg/.Class`, `pkg/pkg.Class`, and nested classes such as
-/// `pkg/pkg.Outer$Inner`. Returns the canonical `pkg/pkg.Class` spelling.
+/// Canonicalizes `pkg/.Class` or `pkg/pkg.Class` to `pkg/pkg.Class`, including nested `$` classes.
 pub fn canonical_component(input: &str) -> Result<String> {
     let Some((package, class)) = input.split_once('/') else {
         return Err(invalid_argument(
