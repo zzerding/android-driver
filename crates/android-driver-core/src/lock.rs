@@ -106,12 +106,6 @@ impl Drop for DeviceLock {
 }
 
 pub fn default_lock_dir() -> Result<PathBuf> {
-    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
-        let runtime = PathBuf::from(runtime);
-        if runtime.is_absolute() {
-            return Ok(runtime.join("android-driver"));
-        }
-    }
     if let Some(home) = std::env::var_os("HOME") {
         let home = PathBuf::from(home);
         if home.is_absolute() {
@@ -212,6 +206,69 @@ fn lock_file_name(endpoint: &AdbEndpoint, serial: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_lock_dir_is_home_based() {
+        const CHILD: &str = "ANDROID_DRIVER_LOCK_DIR_TEST_CHILD";
+        const EXPECTED: &str = "ANDROID_DRIVER_EXPECTED_LOCK_DIR";
+        if std::env::var_os(CHILD).is_some() {
+            match std::env::var_os(EXPECTED) {
+                Some(expected) => assert_eq!(default_lock_dir().unwrap(), PathBuf::from(expected)),
+                None => {
+                    let error = default_lock_dir().unwrap_err();
+                    assert_eq!(error.code, ErrorCode::InvalidArgument);
+                    assert!(error.message.contains("--lock-dir"));
+                    assert!(error.message.contains("HOME"));
+                }
+            }
+            return;
+        }
+
+        let home = std::env::temp_dir().join("android-driver-test-home");
+        let runtime = std::env::temp_dir().join("android-driver-test-runtime");
+        let expected = home.join(".android-driver").join("locks");
+        let cases = [
+            (Some(home.as_path()), None, true),
+            (Some(home.as_path()), Some(runtime.as_path()), true),
+            (
+                Some(home.as_path()),
+                Some(Path::new("relative-runtime")),
+                true,
+            ),
+            (None, Some(runtime.as_path()), false),
+            (Some(Path::new("")), Some(runtime.as_path()), false),
+            (
+                Some(Path::new("relative-home")),
+                Some(runtime.as_path()),
+                false,
+            ),
+        ];
+        for (home, runtime, valid) in cases {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", "lock::tests::default_lock_dir_is_home_based"])
+                .env(CHILD, "1")
+                .env_remove("HOME")
+                .env_remove("XDG_RUNTIME_DIR")
+                .env_remove(EXPECTED);
+            if let Some(home) = home {
+                command.env("HOME", home);
+            }
+            if let Some(runtime) = runtime {
+                command.env("XDG_RUNTIME_DIR", runtime);
+            }
+            if valid {
+                command.env(EXPECTED, &expected);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "HOME={home:?}, XDG_RUNTIME_DIR={runtime:?}:\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
 
     #[test]
     fn lock_names_are_stable_and_endpoint_specific() {
