@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Builds the device-side helper with the official Android SDK jars.
 set -euo pipefail
 
 cd "$(dirname "$0")"

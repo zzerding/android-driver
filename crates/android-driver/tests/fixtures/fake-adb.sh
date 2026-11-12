@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Deterministic adb stand-in for offline integration tests. It records every
-# invocation and serves canned device state; it never talks to a real device.
 set -euo pipefail
 
 state="${FAKE_ADB_STATE:?FAKE_ADB_STATE is required}"

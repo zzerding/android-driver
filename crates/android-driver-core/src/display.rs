@@ -107,10 +107,7 @@ pub enum DisplayFocus {
     Uncertain(String),
 }
 
-/// Parses one display section of `dumpsys activity activities`. Display
-/// sections end at the next display header or at the global "Resumed
-/// activities in task display areas" summary, so the physical display's
-/// resumed activity is never attributed to the virtual display.
+/// Parses the requested display section, excluding subsequent displays and the global resumed-activity summary.
 pub fn display_focus(dump: &str, display_id: u32) -> DisplayFocus {
     let mut found = false;
     let mut inside = false;

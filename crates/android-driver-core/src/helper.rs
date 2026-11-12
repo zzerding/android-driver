@@ -172,9 +172,7 @@ impl Helper {
         self.exit_status().is_some()
     }
 
-    /// Sends `close`, closes stdin (so a helper that never answers still sees
-    /// EOF), and waits for the helper to exit. Any deviation from a clean
-    /// zero exit is reported as a cleanup problem.
+    /// Sends close/EOF and reports exit timeout or abnormal termination as cleanup problems.
     pub fn shutdown(&mut self, timeout: Duration) -> Vec<String> {
         let mut problems = Vec::new();
         let already_exited = self.exit_status().is_some();

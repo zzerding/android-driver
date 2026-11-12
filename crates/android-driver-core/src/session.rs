@@ -438,8 +438,7 @@ impl Driver {
         }
     }
 
-    /// Best-effort shutdown used for stdin EOF and stdout failure. The kernel
-    /// device lock stays held until every cleanup attempt has run.
+    /// Attempts shutdown after stdin EOF or stdout failure, retaining the device lock through every cleanup attempt.
     pub fn shutdown(&mut self) -> Vec<String> {
         let previous = std::mem::replace(&mut self.state, State::Idle);
         match previous {

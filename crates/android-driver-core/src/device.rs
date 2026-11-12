@@ -7,9 +7,7 @@ pub struct Device {
     pub device: Option<String>,
 }
 
-/// Parses `adb devices -l`. Every non-empty entry line must have a serial,
-/// a state, and only key:value attributes afterwards; an unfamiliar line is
-/// an error instead of a silently skipped device.
+/// Parses `adb devices -l`, rejecting unfamiliar or incomplete entries rather than skipping them.
 pub fn parse_devices(output: &str) -> std::result::Result<Vec<Device>, String> {
     let mut lines = output.lines();
     let header = loop {
