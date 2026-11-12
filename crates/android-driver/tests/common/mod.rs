@@ -236,6 +236,8 @@ pub struct DriverProcess {
     child: Child,
     stdin: Option<ChildStdin>,
     lines: Receiver<String>,
+    close_stdout_at_id: Arc<AtomicU64>,
+    stdout_closed: Receiver<()>,
     stderr: Arc<Mutex<Vec<u8>>>,
     status: Option<ExitStatus>,
     next_id: u64,
@@ -249,17 +251,30 @@ impl DriverProcess {
         let stdout = child.stdout.take().expect("stdout");
         let stderr_pipe = child.stderr.take().expect("stderr");
         let (sender, lines) = mpsc::channel();
+        let close_stdout_at_id = Arc::new(AtomicU64::new(0));
+        let thread_close_stdout_at_id = Arc::clone(&close_stdout_at_id);
+        let (stdout_closed_sender, stdout_closed) = mpsc::channel();
         thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
+            let mut reader = BufReader::new(stdout);
+            for line in (&mut reader).lines() {
                 match line {
                     Ok(line) => {
+                        let close_id = thread_close_stdout_at_id.load(Ordering::Acquire);
+                        let close = close_id != 0
+                            && serde_json::from_str::<Value>(&line)
+                                .is_ok_and(|frame| frame["id"].as_u64() == Some(close_id));
                         if sender.send(line).is_err() {
+                            break;
+                        }
+                        if close {
                             break;
                         }
                     }
                     Err(_) => break,
                 }
             }
+            drop(reader);
+            let _ = stdout_closed_sender.send(());
         });
         let stderr = Arc::new(Mutex::new(Vec::new()));
         let thread_stderr = Arc::clone(&stderr);
@@ -282,6 +297,8 @@ impl DriverProcess {
             child,
             stdin,
             lines,
+            close_stdout_at_id,
+            stdout_closed,
             stderr,
             status: None,
             next_id: 1,
@@ -338,6 +355,15 @@ impl DriverProcess {
 
     pub fn close_stdin(&mut self) {
         self.stdin.take();
+    }
+
+    pub fn close_stdout(&mut self) {
+        self.close_stdout_at_id
+            .store(self.next_id, Ordering::Release);
+        ok_result(&self.request("status", json!({})));
+        self.stdout_closed
+            .recv_timeout(Duration::from_secs(5))
+            .expect("stdout reader did not close");
     }
 
     pub fn wait_exit(&mut self, timeout: Duration) -> i32 {

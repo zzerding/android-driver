@@ -744,6 +744,62 @@ fn helper_death_is_reported_as_a_disconnect_and_releases_the_lock() {
 }
 
 #[test]
+fn empty_activity_dump_does_not_confirm_display_removal() {
+    let env = TestEnv::new();
+    let mut driver = env.spawn();
+    ok_result(&driver.request("open", open_request()));
+    std::fs::write(env.state().join("activities"), "").unwrap();
+
+    let closed = driver.request("close", json!({}));
+    assert_eq!(error_code(&closed), "CleanupFailed", "{closed}");
+    let errors = closed["error"]["details"]["cleanup_errors"]
+        .as_array()
+        .expect("cleanup_errors array");
+    assert!(
+        errors.iter().any(|error| error
+            .as_str()
+            .unwrap()
+            .contains("cannot verify removal of virtual display #7")),
+        "{closed}"
+    );
+    assert_eq!(
+        ok_result(&driver.request("status", json!({})))["state"],
+        "failed"
+    );
+    assert!(env.helper_log_contains("\"command\":\"close\""));
+    assert!(!env.state().join("display-active").exists());
+    assert!(env.adb_contains(&["shell", "rm", "-f"]));
+    assert!(!env.state().join("uploaded-jar").exists());
+
+    driver.close_stdin();
+    assert_eq!(driver.wait_exit(Duration::from_secs(5)), 0);
+}
+
+#[test]
+fn stdout_broken_pipe_cleans_up_an_active_session_and_releases_the_lock() {
+    let env = TestEnv::new();
+    let mut driver = env.spawn();
+    ok_result(&driver.request("open", open_request()));
+    driver.close_stdout();
+
+    driver.send_op("status", json!({}));
+    assert_eq!(driver.wait_exit(Duration::from_secs(10)), 1);
+    common::wait_until(Duration::from_secs(5), || {
+        driver.stderr_text().contains("cannot write a response")
+    });
+    assert!(env.helper_log_contains("\"command\":\"close\""));
+    assert!(!env.state().join("display-active").exists());
+    assert!(env.adb_contains(&["shell", "rm", "-f"]));
+    assert!(!env.state().join("uploaded-jar").exists());
+
+    let mut replacement = env.spawn();
+    ok_result(&replacement.request("open", open_request()));
+    ok_result(&replacement.request("close", json!({})));
+    replacement.close_stdin();
+    assert_eq!(replacement.wait_exit(Duration::from_secs(5)), 0);
+}
+
+#[test]
 fn cleanup_failures_are_surfaced_and_the_lock_is_released_after_attempts() {
     let env = TestEnv::new();
     let mut driver = env.spawn_with(
