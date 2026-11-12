@@ -234,11 +234,7 @@ impl Driver {
         };
         let reply = match reply {
             Ok(reply) => reply,
-            Err(error)
-                if error.code == ErrorCode::Cancelled || error.code == ErrorCode::Timeout =>
-            {
-                return Err(error);
-            }
+            Err(error) if error.code == ErrorCode::Cancelled => return Err(error),
             Err(error) if self.must_invalidate(&error) => {
                 return Err(self.invalidate_active(error));
             }
@@ -925,7 +921,10 @@ impl Driver {
     fn must_invalidate(&self, error: &DriverError) -> bool {
         matches!(
             error.code,
-            ErrorCode::DeviceDisconnected | ErrorCode::Internal | ErrorCode::CleanupFailed
+            ErrorCode::DeviceDisconnected
+                | ErrorCode::Internal
+                | ErrorCode::CleanupFailed
+                | ErrorCode::Timeout
         )
     }
 }

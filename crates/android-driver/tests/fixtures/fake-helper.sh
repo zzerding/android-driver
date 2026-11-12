@@ -70,9 +70,13 @@ while IFS= read -r line; do
         reply_error "$id" "No virtual display frame yet"
         continue
       fi
+      if [[ -n "${FAKE_HELPER_SNAPSHOT_DELAY_MS:-}" ]]; then
+        sleep "$(awk -v ms="$FAKE_HELPER_SNAPSHOT_DELAY_MS" 'BEGIN { printf "%.3f", ms / 1000 }')"
+      fi
       encoded="$(base64 < "$state/snapshot.png" | tr -d '\n')"
       printf '{"id":%s,"ok":true,"result":{"width":%s,"height":%s,"timestamp":123456789,"png":"%s"}}\n' \
         "$id" "$width" "$height" "$encoded"
+      touch "$state/snapshot-replied"
       ;;
     activity_info)
       user=""
@@ -87,8 +91,12 @@ while IFS= read -r line; do
         reply_error "$id" "fake activity lookup failed"
         continue
       fi
+      if [[ -n "${FAKE_HELPER_ACTIVITY_DELAY_MS:-}" ]]; then
+        sleep "$(awk -v ms="$FAKE_HELPER_ACTIVITY_DELAY_MS" 'BEGIN { printf "%.3f", ms / 1000 }')"
+      fi
       printf '{"id":%s,"ok":true,"result":{"user":%s,"component":"%s","launch_mode":%s,"task_affinity":"com.example.app","exported":true}}\n' \
         "$id" "${user:-0}" "$component" "${FAKE_HELPER_LAUNCH_MODE:-0}"
+      touch "$state/activity-info-replied"
       ;;
     close)
       if [[ "${FAKE_HELPER_IGNORE_CLOSE:-0}" == "1" ]]; then

@@ -463,6 +463,67 @@ fn an_input_timeout_reports_timeout_once_and_invalidates_the_session() {
 }
 
 #[test]
+fn helper_timeouts_discard_late_replies_and_release_the_lock() {
+    for (operation, fields, delay, replied) in [
+        (
+            "screenshot",
+            json!({}),
+            "FAKE_HELPER_SNAPSHOT_DELAY_MS",
+            "snapshot-replied",
+        ),
+        (
+            "activity_info",
+            json!({"component": COMPONENT, "user": 0}),
+            "FAKE_HELPER_ACTIVITY_DELAY_MS",
+            "activity-info-replied",
+        ),
+    ] {
+        let env = TestEnv::new();
+        let mut driver = env.spawn_with(
+            &[
+                "--helper-timeout-ms",
+                "1000",
+                "--cleanup-timeout-ms",
+                "5000",
+            ],
+            &[(delay, "2000")],
+        );
+        ok_result(&driver.request("open", open_request()));
+
+        let timed_out = driver.request(operation, fields.clone());
+        assert_eq!(error_code(&timed_out), "Timeout", "{operation}");
+        let status = ok_result(&driver.request("status", json!({})));
+        assert_eq!(status["state"], "failed", "{operation}");
+        assert!(env.state().join(replied).is_file(), "{operation}");
+        assert!(env.helper_log_contains("\"command\":\"close\""));
+        assert!(env.adb_contains(&["shell", "rm", "-f"]));
+        assert!(!env.state().join("display-active").exists());
+
+        let log_before = std::fs::read(env.state().join("helper-log")).unwrap();
+        let after = driver.request(operation, fields);
+        assert_eq!(error_code(&after), "InvalidState", "{operation}");
+        assert_eq!(
+            std::fs::read(env.state().join("helper-log")).unwrap(),
+            log_before,
+            "a late reply must not be consumed by a subsequent {operation} request"
+        );
+
+        let mut replacement = env.spawn();
+        let opened = ok_result(&replacement.request("open", open_request()));
+        assert_eq!(
+            opened["state"], "active",
+            "the device lock must be released"
+        );
+        ok_result(&replacement.request("close", json!({})));
+        replacement.close_stdin();
+        assert_eq!(replacement.wait_exit(Duration::from_secs(5)), 0);
+
+        driver.close_stdin();
+        assert_eq!(driver.wait_exit(Duration::from_secs(5)), 0);
+    }
+}
+
+#[test]
 fn helper_death_is_reported_as_a_disconnect_and_releases_the_lock() {
     let env = TestEnv::new();
     let mut driver = env.spawn_with(&[], &[("FAKE_HELPER_EXIT_AFTER_READY", "1")]);
