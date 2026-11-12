@@ -1,83 +1,14 @@
 pub const MAX_PNG_BYTES: usize = 8 * 1024 * 1024;
 
 pub mod base64 {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    use ::base64::{Engine as _, engine::general_purpose::STANDARD};
 
     pub fn encode(input: &[u8]) -> String {
-        let mut output = String::with_capacity(input.len().div_ceil(3) * 4);
-        for chunk in input.chunks(3) {
-            let first = chunk[0] as u32;
-            let second = chunk.get(1).copied().unwrap_or(0) as u32;
-            let third = chunk.get(2).copied().unwrap_or(0) as u32;
-            let value = (first << 16) | (second << 8) | third;
-            output.push(ALPHABET[((value >> 18) & 0x3f) as usize] as char);
-            output.push(ALPHABET[((value >> 12) & 0x3f) as usize] as char);
-            if chunk.len() > 1 {
-                output.push(ALPHABET[((value >> 6) & 0x3f) as usize] as char);
-            } else {
-                output.push('=');
-            }
-            if chunk.len() > 2 {
-                output.push(ALPHABET[(value & 0x3f) as usize] as char);
-            } else {
-                output.push('=');
-            }
-        }
-        output
+        STANDARD.encode(input)
     }
 
     pub fn decode(input: &str) -> std::result::Result<Vec<u8>, String> {
-        if !input.len().is_multiple_of(4) {
-            return Err("base64 length is not a multiple of four".to_owned());
-        }
-        let bytes = input.as_bytes();
-        let mut output = Vec::with_capacity(input.len() / 4 * 3);
-        let mut index = 0;
-        while index < bytes.len() {
-            let chunk = &bytes[index..index + 4];
-            let last_chunk = index + 4 == bytes.len();
-            let mut values = [0u32; 4];
-            let mut padding = 0usize;
-            for (slot, byte) in chunk.iter().enumerate() {
-                if *byte == b'=' {
-                    if !last_chunk || slot < 2 || (slot == 2 && chunk[3] != b'=') {
-                        return Err("base64 padding is not at the end".to_owned());
-                    }
-                    padding += 1;
-                    values[slot] = 0;
-                } else {
-                    if padding > 0 {
-                        return Err("base64 padding is not at the end".to_owned());
-                    }
-                    values[slot] = decode_byte(*byte)
-                        .ok_or_else(|| "base64 contains an invalid character".to_owned())?;
-                }
-            }
-            if padding > 2 {
-                return Err("base64 has too much padding".to_owned());
-            }
-            let value = (values[0] << 18) | (values[1] << 12) | (values[2] << 6) | values[3];
-            output.push(((value >> 16) & 0xff) as u8);
-            if padding < 2 {
-                output.push(((value >> 8) & 0xff) as u8);
-            }
-            if padding < 1 {
-                output.push((value & 0xff) as u8);
-            }
-            index += 4;
-        }
-        Ok(output)
-    }
-
-    fn decode_byte(byte: u8) -> Option<u32> {
-        match byte {
-            b'A'..=b'Z' => Some(u32::from(byte - b'A')),
-            b'a'..=b'z' => Some(u32::from(byte - b'a') + 26),
-            b'0'..=b'9' => Some(u32::from(byte - b'0') + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
-        }
+        STANDARD.decode(input).map_err(|error| error.to_string())
     }
 }
 
@@ -250,6 +181,48 @@ mod tests {
         broken[20] ^= 1;
         assert!(validate_png(&broken, 360, 640).is_err());
         assert!(validate_png(b"not a png", 1, 1).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_headers_and_oversized_pngs() {
+        let mut wrong_header = png(360, 640);
+        wrong_header[12..16].copy_from_slice(b"IDAT");
+        assert!(validate_png(&wrong_header, 360, 640).is_err());
+        assert!(validate_png(&png(0, 640), 0, 640).is_err());
+        assert!(validate_png(&png(360, 640)[..20], 360, 640).is_err());
+        assert!(validate_png(&vec![0; MAX_PNG_BYTES + 1], 360, 640).is_err());
+    }
+
+    #[test]
+    fn png_validation_does_not_decode_image_data() {
+        let original = png(360, 640);
+        let mut bytes = original[..33].to_vec();
+        bytes.extend_from_slice(&chunk(b"IDAT", b"not compressed image data"));
+        bytes.extend_from_slice(&chunk(b"IEND", &[]));
+        validate_png(&bytes, 360, 640).unwrap();
+    }
+
+    #[test]
+    fn base64_matches_rfc4648_vectors() {
+        for (plain, encoded) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64::encode(plain.as_bytes()), encoded);
+            assert_eq!(base64::decode(encoded).unwrap(), plain.as_bytes());
+        }
+    }
+
+    #[test]
+    fn base64_rejects_noncanonical_padding_and_trailing_bits() {
+        for encoded in ["Zg", "Zg=", "Zg===", "Zh==", "Zm9=", "Zg==\n", "-w=="] {
+            assert!(base64::decode(encoded).is_err(), "accepted {encoded:?}");
+        }
     }
 
     #[test]

@@ -33,6 +33,10 @@ Input coordinates are unsigned, zero-based screenshot pixels. The passed width a
 
 `open` takes a cross-process, host-local exclusive lock for the adb-server endpoint and serial. Only Android SDK 34 and shell UID 2000 are accepted. An open session binds one serial and user. Input is unavailable until a target is launched successfully. No physical-display fallback occurs.
 
+Screenshot Base64 uses the standard RFC 4648 alphabet with canonical padding and zero unused trailing bits. The driver rejects PNG data above 8 MiB, invalid signatures, truncated chunks, bad chunk CRCs, unknown critical chunks, and missing IHDR, nonempty IDAT, or IEND chunks. IHDR must be the first and only header, have 13 bytes, and contain positive dimensions matching the virtual display. IEND must be empty and end the file.
+
+These are bounded container checks, not full PNG validation or image decoding. The driver does not validate every IHDR field or all chunk-order constraints, decompress IDAT, or validate scanlines and pixels. Passing these checks does not guarantee that an image decoder can decode the screenshot; clients must handle image-decoding failures.
+
 ## Responses
 
 Success:
